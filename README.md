@@ -8,7 +8,22 @@ Every payment platform depends on a third-party processor (Stripe, Adyen, etc.) 
 This project builds a payment gateway that detects a degrading provider automatically, reroutes live traffic to a healthy secondary provider before customers notice, and guarantees each transaction is processed exactly once — even under Kafka retries and concurrent duplicate requests.
 
 ## Architecture
-<img width="972" height="750" alt="paymentGatewayArchitecture" src="https://github.com/user-attachments/assets/df030c12-8a1d-42e1-9e8d-e25330e753ed" />
+```mermaid
+flowchart TD
+    A[Client] -->|POST /payments| B[Spring Boot REST API]
+    B --> C{Idempotency Check Redis SETNX}
+    C -->|New Transaction| D[(PostgreSQL Save PENDING)]
+    D --> E[[Kafka Topic: payments]]
+    E --> F[Payment Consumer]
+    F --> G[Payment Routing Service]
+    G --> H{Circuit Breaker}
+    H -->|Healthy| I[Primary Provider]
+    H -->|Degraded| J[Secondary Provider]
+    I --> K[(Update Status: PostgreSQL + Redis)]
+    J --> K
+    C -->|Duplicate| L[Return Cached Status]
+```
+The diagram above shows the system's components and how data moves between them. The sequence below zooms into a single request, showing exactly what happens in the few hundred milliseconds after a payment is submitted - specifically, how the circuit breaker decides whether to trust the primary provider or reroute instantly to the secondary
 
 ### Failover Flow
  
@@ -34,7 +49,6 @@ sequenceDiagram
     end
     API-->>C: 200 OK
 ```
- 
 ## Key Engineering Highlights
  
 - **Idempotent request handling** — Redis `SETNX` guarantees a duplicate submission of the same transaction ID is never double-processed, even under concurrent retries.
