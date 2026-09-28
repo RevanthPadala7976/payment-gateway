@@ -9,6 +9,7 @@ This project builds a payment gateway that detects a degrading provider automati
 
 ## Architecture
 ```mermaid
+%%{init: {'theme': 'default', 'flowchart': {'nodeSpacing': 20, 'rankSpacing': 30, 'fontSize': 13, 'curve': 'linear'}}}%%
 flowchart TD
     A[Client] -->|POST /payments| B[Spring Boot REST API]
     B --> C{Idempotency Check Redis SETNX}
