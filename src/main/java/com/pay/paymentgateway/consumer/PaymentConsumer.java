@@ -31,6 +31,17 @@ public class PaymentConsumer {
         this.paymentRoutingService = paymentRoutingService;
     }
 
+    /**
+     * Triggered automatically by Spring Kafka whenever a new message lands on the "payments" topic
+     * No one calls this directly. This message can arrive from two places:
+     * 1. PaymentService (old direct path, now unused [without scheduling])
+     * 2. OutboxPoller (current path, reads PENDING rows from outbox_event and publish them here)
+     * This method does not care which one sent it.
+     * *
+     * Flow:
+     * deserialized JSON -> Payment, run it through the circuit breaker
+     * (PaymentRoutingService), then persist the final APPROVAL/DECLINED STATUS to Postgres and Redis
+     */
     @KafkaListener(topics = "payments", groupId = "payment-group")
     public void receivePayment(String message) {
         try {
