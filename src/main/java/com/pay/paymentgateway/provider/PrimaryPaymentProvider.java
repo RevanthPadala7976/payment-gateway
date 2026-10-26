@@ -16,7 +16,7 @@ public class PrimaryPaymentProvider implements PaymentProvider {
         if(chance < 15){
             // Simulating Failure: hanging connection followed by failure
             try{
-                Thread.sleep(2000);
+               Thread.sleep(400);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
             }

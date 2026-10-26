@@ -23,7 +23,7 @@ services:
 
   # Apache Kafka (KRaft mode - ZooKeeper is no longer needed in latest Kafka)
   kafka:
-    image: confluentinc/cp-kafka:3.8
+    image: confluentinc/cp-kafka:7.6.0
     container_name: payment_kafka
     ports:
       - "9092:9092"
@@ -42,6 +42,29 @@ services:
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
       KAFKA_LOG_DIRS: '/tmp/kraft-combined-logs'
       CLUSTER_ID: 'MkU3OEVBNTcwNTJENDM2Qk'
+
+  # Prometheus
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    container_name: payment_prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+
+  #Grafana
+  grafana:
+    image: grafana/grafana:11.1.0
+    container_name: payment_grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    depends_on:
+      - prometheus
+
 
 volumes:
   postgres_data:

@@ -14,7 +14,8 @@ public interface OutboxRepository extends JpaRepository<OutboxEvent, Long> {
 
     @Modifying
     @Transactional
+    // The transactional annotation apply the row level lock. So, if two instances were trying to update the row, Postgres all only one to make the changes.
     @Query("UPDATE OutboxEvent e SET e.status = 'PROCESSING' WHERE e.status = 'PENDING'")
     int claimPendingEvents();
-
+    long countByStatus(OutboxStatus status);
 }

@@ -13,6 +13,8 @@ import org.springframework.stereotype.Service;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Duration;
+
 @Service
 public class PaymentService {
     private final RedisTemplate<String, String> redisTemplate; // This talks to Redis to check for duplicate entries
@@ -28,7 +30,11 @@ public class PaymentService {
 
     public String initiatePayment(Payment payment) {
         // Add it to redis
-        boolean isNew = redisTemplate.opsForValue().setIfAbsent(payment.getTransactionId(), PaymentStatus.PENDING.name());
+        boolean isNew = redisTemplate.opsForValue().setIfAbsent(
+                payment.getTransactionId(),
+                PaymentStatus.PENDING.name(),
+                Duration.ofHours(24)
+        );
 
         /* *
          * Redis will return false, if the request already exist

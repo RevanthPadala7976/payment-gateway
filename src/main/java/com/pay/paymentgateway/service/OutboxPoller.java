@@ -25,7 +25,7 @@ public class OutboxPoller {
         this.outboxRepository = outboxRepository;
     }
 
-    @Scheduled(fixedRate = 6000)
+    @Scheduled(fixedRate = 2000)
     public void outboxScheduler(){
         int claimed = outboxRepository.claimPendingEvents();
         if(claimed == 0){
@@ -44,6 +44,8 @@ public class OutboxPoller {
                 event.incrementRetryCount();
                 if(event.getRetryCount() >= MAX_RETRY_COUNT){
                     event.setStatus(OutboxStatus.FAILED);
+                } else {
+                    event.setStatus(OutboxStatus.PENDING); // re-enter the atomic claim step, not the unprotected one
                 }
                 outboxRepository.save(event);
             }
