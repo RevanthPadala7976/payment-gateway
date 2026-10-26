@@ -49,15 +49,15 @@ public class Controller {
     @PostMapping
     public ResponseEntity<?> initiatePayment(@RequestBody Payment payment) {
         log.info("Received payment request for ID: {}", payment.getTransactionId());
-        String status = paymentService.initiatePayment(payment);
+        PaymentService.InitiationResult result = paymentService.initiatePayment(payment);
 
-        if ("PENDING".equals(status)) {
+        if (result.isNew()) {
             log.info("Payment {} accepted and sent to Kafka.", payment.getTransactionId());
             return ResponseEntity.status(HttpStatus.ACCEPTED).body(
                     Map.of(
                             "message", "Payment initiated successfully",
                             "transactionID", payment.getTransactionId(),
-                            "status", status
+                            "status", result.status()
                     )
             );
         } else {
@@ -66,7 +66,7 @@ public class Controller {
                     Map.of(
                             "message", "Payment already exists",
                             "transactionID", payment.getTransactionId(),
-                            "status", status
+                            "status", result.status()
                     )
             );
         }

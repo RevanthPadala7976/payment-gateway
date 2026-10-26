@@ -17,7 +17,12 @@ import java.time.Duration;
 
 @Service
 public class PaymentService {
-    private final RedisTemplate<String, String> redisTemplate; // This talks to Redis to check for duplicate entries
+
+    // NEW: carries both the status string AND whether this request was the
+    // actual winner of the Redis lock — the controller needs both pieces.
+    public record InitiationResult(boolean isNew, String status) {}
+
+    private final RedisTemplate<String, String> redisTemplate;
     private final PaymentPersistenceService paymentPersistenceService;
 
     @Autowired
@@ -26,32 +31,26 @@ public class PaymentService {
         this.redisTemplate = redisTemplate;
         this.paymentPersistenceService = paymentPersistenceService;
     }
-    // Application logic
 
-    public String initiatePayment(Payment payment) {
-        // Add it to redis
+    // CHANGED: return type is now InitiationResult, not String
+    public InitiationResult initiatePayment(Payment payment) {
         boolean isNew = redisTemplate.opsForValue().setIfAbsent(
                 payment.getTransactionId(),
                 PaymentStatus.PENDING.name(),
                 Duration.ofHours(24)
         );
 
-        /* *
-         * Redis will return false, if the request already exist
-         * Return true, if the request is new
-         * If returns true, we save the permanent record to database
-         * Give it to Kafka by returning PENDING message
-         * */
-        if(isNew) {
+        if (isNew) {
             try {
                 paymentPersistenceService.savePaymentAndOutbox(payment);
-                return "PENDING";
+                return new InitiationResult(true, "PENDING");
             } catch (Exception ex) {
                 redisTemplate.delete(payment.getTransactionId());
-                throw new RuntimeException("Failed to save payment and outbox event: "+ ex.getMessage(), ex);
+                throw new RuntimeException("Failed to save payment and outbox event: " + ex.getMessage(), ex);
             }
-        } else{
-            return redisTemplate.opsForValue().get(payment.getTransactionId());
+        } else {
+            String cachedStatus = redisTemplate.opsForValue().get(payment.getTransactionId());
+            return new InitiationResult(false, cachedStatus);
         }
     }
 }

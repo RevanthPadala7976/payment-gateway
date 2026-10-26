@@ -171,6 +171,43 @@
   </div>
 
   <div class="card" style="grid-column: 1 / -1;">
+    <h2>Full End-to-End Load Test (Redis + Postgres + Outbox + Kafka)</h2>
+    <div class="subtitle" style="margin-bottom:12px;">Hits the real POST /api/v1/payments path — this is the test that produces your actual resume/README numbers.</div>
+
+    <div style="display:grid; grid-template-columns: 1fr 1fr; gap:16px;">
+      <div>
+        <p style="font-size:13px; color:var(--muted); margin:0 0 6px;">Completion test</p>
+        <div style="display:flex; gap:8px; margin-bottom:8px;">
+          <input id="e2eCount" type="number" value="500" min="10" max="5000" step="10"
+                 style="flex:1; background:var(--bg); color:var(--text); border:1px solid var(--border); border-radius:8px; padding:8px; font-size:14px;">
+          <span style="align-self:center; font-size:13px; color:var(--muted);">unique transactions</span>
+        </div>
+        <button id="e2eBtn" onclick="runEndToEndTest()">Run End-to-End Test</button>
+        <div style="margin-top:12px;">
+          <div class="stat-row"><span>Submitted</span><span class="stat-value" id="e2eSubmitted">0</span></div>
+          <div class="stat-row"><span>Completed (terminal state)</span><span class="stat-value" id="e2eCompleted">0</span></div>
+          <div class="stat-row"><span>Still pending after wait</span><span class="stat-value" id="e2ePending">0</span></div>
+        </div>
+      </div>
+
+      <div>
+        <p style="font-size:13px; color:var(--muted); margin:0 0 6px;">Idempotency stress test</p>
+        <div style="display:flex; gap:8px; margin-bottom:8px;">
+          <input id="idemCount" type="number" value="50" min="5" max="500" step="5"
+                 style="flex:1; background:var(--bg); color:var(--text); border:1px solid var(--border); border-radius:8px; padding:8px; font-size:14px;">
+          <span style="align-self:center; font-size:13px; color:var(--muted);">concurrent retries, 1 transaction ID</span>
+        </div>
+        <button id="idemBtn" onclick="runIdempotencyStressTest()" style="background:#be185d;">Fire Duplicate Requests</button>
+        <div style="margin-top:12px;">
+          <div class="stat-row"><span>Accepted as new (202)</span><span class="stat-value" id="idemNew">0</span></div>
+          <div class="stat-row"><span>Correctly caught as duplicate (200)</span><span class="stat-value" id="idemDup">0</span></div>
+          <div class="stat-row"><span>Errors</span><span class="stat-value" id="idemErr">0</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card" style="grid-column: 1 / -1;">
     <h2>Transaction Log</h2>
     <div class="log" id="log">Waiting for activity…</div>
   </div>
@@ -318,6 +355,116 @@
     } catch (e) {
       logLine(`${txnId} → ERROR submitting real payment: ${e.message}`, "fail");
     }
+    btn.disabled = false;
+  }
+
+  async function submitOnePayment(txnId, amount) {
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/payments`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          transactionId: txnId,
+          userEmail: "loadtest@example.com",
+          amount: amount,
+          currency: "USD"
+        })
+      });
+      const data = await res.json().catch(() => ({}));
+      return { txnId, httpStatus: res.status, body: data };
+    } catch (e) {
+      return { txnId, httpStatus: 0, error: e.message };
+    }
+  }
+
+  async function checkStatus(txnId) {
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/payments/${txnId}`);
+      if (res.status === 404) return { txnId, terminal: false, notFound: true };
+      const data = await res.json();
+      const terminal = data.status === "APPROVED" || data.status === "DECLINED";
+      return { txnId, terminal, status: data.status };
+    } catch (e) {
+      return { txnId, terminal: false, error: e.message };
+    }
+  }
+
+  async function runEndToEndTest() {
+    const btn = document.getElementById("e2eBtn");
+    const total = Math.max(10, Math.min(5000, parseInt(document.getElementById("e2eCount").value, 10) || 500));
+    btn.disabled = true;
+
+    logLine(`Starting end-to-end test: submitting ${total} unique transactions via POST /payments...`, "");
+
+    const BATCH_SIZE = 20;
+    const ids = [];
+    for (let i = 0; i < total; i++) ids.push("e2e-" + Date.now() + "-" + i);
+
+    let submitted = 0;
+    for (let i = 0; i < ids.length; i += BATCH_SIZE) {
+      const batch = ids.slice(i, i + BATCH_SIZE);
+      await Promise.all(batch.map(id => submitOnePayment(id, (Math.random() * 200 + 10).toFixed(2))));
+      submitted += batch.length;
+      document.getElementById("e2eSubmitted").textContent = submitted;
+      await new Promise(r => setTimeout(r, 100));
+    }
+
+    logLine(`All ${total} submitted. Waiting for the outbox/Kafka pipeline to process them...`, "");
+
+    let unresolved = new Set(ids);
+    const checkpoints = [5000, 10000, 20000];
+
+    for (const waitMs of checkpoints) {
+      await new Promise(r => setTimeout(r, waitMs));
+      const toCheck = Array.from(unresolved);
+      const results = [];
+      for (let i = 0; i < toCheck.length; i += BATCH_SIZE) {
+        const batch = toCheck.slice(i, i + BATCH_SIZE);
+        const res = await Promise.all(batch.map(checkStatus));
+        results.push(...res);
+      }
+      for (const r of results) {
+        if (r.terminal) unresolved.delete(r.txnId);
+      }
+      const completed = total - unresolved.size;
+      document.getElementById("e2eCompleted").textContent = completed;
+      document.getElementById("e2ePending").textContent = unresolved.size;
+      logLine(`Checkpoint +${waitMs/1000}s: ${completed}/${total} completed, ${unresolved.size} still pending`, "");
+    }
+
+    const finalCompleted = total - unresolved.size;
+    const completionRate = ((finalCompleted / total) * 100).toFixed(1);
+    logLine(`End-to-end test complete: ${finalCompleted}/${total} reached a terminal state (${completionRate}% completion rate). ${unresolved.size} never resolved.`, unresolved.size > 0 ? "fail" : "success");
+    btn.disabled = false;
+  }
+
+  async function runIdempotencyStressTest() {
+    const btn = document.getElementById("idemBtn");
+    const count = Math.max(5, Math.min(500, parseInt(document.getElementById("idemCount").value, 10) || 50));
+    btn.disabled = true;
+
+    const txnId = "idem-" + Date.now();
+    logLine(`Firing ${count} concurrent requests, all with the same transaction ID: ${txnId}`, "");
+
+    const promises = [];
+    for (let i = 0; i < count; i++) {
+      promises.push(submitOnePayment(txnId, "99.99"));
+    }
+    const results = await Promise.all(promises);
+
+    let newCount = 0, dupCount = 0, errCount = 0;
+    for (const r of results) {
+      if (r.httpStatus === 202) newCount++;
+      else if (r.httpStatus === 200) dupCount++;
+      else errCount++;
+    }
+
+    document.getElementById("idemNew").textContent = newCount;
+    document.getElementById("idemDup").textContent = dupCount;
+    document.getElementById("idemErr").textContent = errCount;
+
+    logLine(`Idempotency test complete: ${newCount} accepted as new, ${dupCount} correctly caught as duplicates, ${errCount} errors (sent ${count} total for txn ${txnId}).`, newCount === 1 ? "success" : "fail");
+    logLine(`Verify in Postgres: SELECT COUNT(*) FROM payments WHERE transaction_id = '${txnId}'; — should return exactly 1.`, "");
     btn.disabled = false;
   }
 
